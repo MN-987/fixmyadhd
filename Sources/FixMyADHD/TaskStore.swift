@@ -78,6 +78,15 @@ final class TaskStore: ObservableObject {
         save()
     }
 
+    func moveTask(_ id: UUID, by slots: Int) {
+        guard slots != 0, let from = tasks.firstIndex(where: { $0.id == id }) else { return }
+        let to = min(max(from + slots, 0), tasks.count - 1)
+        guard to != from else { return }
+        let item = tasks.remove(at: from)
+        tasks.insert(item, at: to)
+        save()
+    }
+
     func restore(_ id: UUID) {
         guard let index = later.firstIndex(where: { $0.id == id }) else { return }
         let item = later.remove(at: index)

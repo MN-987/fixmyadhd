@@ -1,8 +1,11 @@
+import AppKit
 import SwiftUI
 
 struct StickyNoteView: View {
     @ObservedObject var store: TaskStore
     @State private var draft = ""
+    @State private var draggingId: UUID?
+    @State private var dragTranslation: CGFloat = 0
 
     private let paper = Color(red: 1.0, green: 0.91, blue: 0.40)
     private let ink = Color.black.opacity(0.88)
@@ -134,11 +137,31 @@ struct StickyNoteView: View {
         } else {
             ForEach(store.tasks) { item in
                 HStack(alignment: .center, spacing: 8) {
-                    Text(item.title)
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
-                        .foregroundStyle(ink)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .multilineTextAlignment(.leading)
+                    HStack(spacing: 8) {
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.black.opacity(0.35))
+                            .frame(width: 18, height: 28)
+                        Text(item.title)
+                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .foregroundStyle(ink)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .overlay(
+                        TaskDragSurface(
+                            onChanged: { dy in
+                                draggingId = item.id
+                                dragTranslation = dy
+                            },
+                            onEnded: { dy in
+                                let slots = Int((dy / taskRowStride).rounded())
+                                store.moveTask(item.id, by: slots)
+                                draggingId = nil
+                                dragTranslation = 0
+                            }
+                        )
+                    )
 
                     Button {
                         store.complete(item.id)
@@ -160,6 +183,9 @@ struct StickyNoteView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
+                .background(draggingId == item.id ? Color.white.opacity(0.55) : Color.clear)
+                .offset(y: draggingId == item.id ? dragTranslation : 0)
+                .zIndex(draggingId == item.id ? 1 : 0)
                 rowLine
             }
         }
@@ -271,6 +297,50 @@ struct StickyNoteView: View {
     private func park() {
         store.addLater(draft)
         draft = ""
+    }
+}
+
+private let taskRowStride: CGFloat = 46
+
+private struct TaskDragSurface: NSViewRepresentable {
+    var onChanged: (CGFloat) -> Void
+    var onEnded: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> TaskDragNSView {
+        let view = TaskDragNSView()
+        view.onChanged = onChanged
+        view.onEnded = onEnded
+        return view
+    }
+
+    func updateNSView(_ view: TaskDragNSView, context: Context) {
+        view.onChanged = onChanged
+        view.onEnded = onEnded
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: TaskDragNSView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 180, height: proposal.height ?? 32)
+    }
+}
+
+private final class TaskDragNSView: NSView {
+    var onChanged: ((CGFloat) -> Void)?
+    var onEnded: ((CGFloat) -> Void)?
+    private var startY: CGFloat = 0
+
+    override var isOpaque: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        startY = event.locationInWindow.y
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        onChanged?(startY - event.locationInWindow.y)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        onEnded?(startY - event.locationInWindow.y)
     }
 }
 
