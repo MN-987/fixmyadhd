@@ -1,6 +1,8 @@
 # FixMyADHD
 
 A yellow sticky note that stays on your Mac screen.
+<img width="517" height="474" alt="Screenshot 2026-10-04 at 12 46 23 am" src="https://github.com/user-attachments/assets/87ec643d-6abe-46b3-b59d-082b2a8291c6" />
+
 
 Type a task. Check it off. Park a distraction for later. Collapse the card to a thin line when you need it out of the way.
 
