@@ -1,0 +1,11 @@
+.DS_Store
+.build/
+.swiftpm/
+FixMyADHD.app/
+*.dSYM
+DerivedData/
+xcuserdata/
+
+# Personal task list. This file lives in Application Support, not in git.
+tasks.json
+**/tasks.json
