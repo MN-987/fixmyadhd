@@ -23,6 +23,7 @@ private struct SavedState: Codable {
     var frameHeight: Double?
     var collapsed: Bool?
     var collapsedOnRight: Bool?
+    var stripY: Double?
 }
 
 @MainActor
@@ -36,8 +37,12 @@ final class TaskStore: ObservableObject {
 
     var onCollapse: () -> Void = {}
     var onExpand: () -> Void = {}
+    var onStripDragBegan: () -> Void = {}
+    var onStripDrag: (CGFloat) -> Void = { _ in }
+    var onStripDragEnded: (CGFloat) -> Void = { _ in }
 
     private(set) var savedFrame: NSRect?
+    private(set) var savedStripY: CGFloat?
     private let fileURL: URL
     private var frame: NSRect?
 
@@ -52,14 +57,14 @@ final class TaskStore: ObservableObject {
     func add(_ raw: String) {
         let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
-        tasks.insert(TaskItem(id: UUID(), title: title), at: 0)
+        tasks.append(TaskItem(id: UUID(), title: title))
         save()
     }
 
     func addLater(_ raw: String) {
         let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
-        later.insert(TaskItem(id: UUID(), title: title), at: 0)
+        later.append(TaskItem(id: UUID(), title: title))
         save()
     }
 
@@ -75,6 +80,24 @@ final class TaskStore: ObservableObject {
         guard let index = tasks.firstIndex(where: { $0.id == id }) else { return }
         let item = tasks.remove(at: index)
         later.insert(item, at: 0)
+        save()
+    }
+
+    func rename(_ id: UUID, to raw: String) {
+        let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        if let index = tasks.firstIndex(where: { $0.id == id }) {
+            guard tasks[index].title != title else { return }
+            tasks[index].title = title
+        } else if let index = later.firstIndex(where: { $0.id == id }) {
+            guard later[index].title != title else { return }
+            later[index].title = title
+        } else if let index = done.firstIndex(where: { $0.id == id }) {
+            guard done[index].title != title else { return }
+            done[index].title = title
+        } else {
+            return
+        }
         save()
     }
 
@@ -100,6 +123,11 @@ final class TaskStore: ObservableObject {
         save()
     }
 
+    func saveStripY(_ y: CGFloat) {
+        savedStripY = y
+        save()
+    }
+
     private func load() {
         guard let data = try? Data(contentsOf: fileURL),
               let state = try? JSONDecoder().decode(SavedState.self, from: data) else {
@@ -110,6 +138,7 @@ final class TaskStore: ObservableObject {
         done = state.done ?? []
         isCollapsed = state.collapsed ?? false
         collapsedOnRight = state.collapsedOnRight ?? true
+        savedStripY = state.stripY.map { CGFloat($0) }
         if let x = state.frameX, let y = state.frameY,
            let width = state.frameWidth, let height = state.frameHeight {
             let rect = NSRect(x: x, y: y, width: width, height: height)
@@ -129,7 +158,8 @@ final class TaskStore: ObservableObject {
             frameWidth: frame.map { Double($0.size.width) },
             frameHeight: frame.map { Double($0.size.height) },
             collapsed: isCollapsed,
-            collapsedOnRight: collapsedOnRight
+            collapsedOnRight: collapsedOnRight,
+            stripY: savedStripY.map { Double($0) }
         )
         guard let data = try? JSONEncoder().encode(state) else { return }
         try? data.write(to: fileURL, options: .atomic)

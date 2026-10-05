@@ -6,6 +6,10 @@ struct StickyNoteView: View {
     @State private var draft = ""
     @State private var draggingId: UUID?
     @State private var dragTranslation: CGFloat = 0
+    @State private var editingId: UUID?
+    @State private var editDraft = ""
+    @State private var discardEdit = false
+    @FocusState private var editFocused: Bool
 
     private let paper = Color(red: 1.0, green: 0.91, blue: 0.40)
     private let ink = Color.black.opacity(0.88)
@@ -37,16 +41,18 @@ struct StickyNoteView: View {
     }
 
     private var collapsedStrip: some View {
-        Button(action: store.onExpand) {
+        ZStack {
+            paper
             Image(systemName: store.collapsedOnRight ? "chevron.left" : "chevron.right")
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(ink)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
+            StripDragSurface(
+                onBegan: store.onStripDragBegan,
+                onChanged: store.onStripDrag,
+                onEnded: store.onStripDragEnded
+            )
         }
-        .buttonStyle(.plain)
-        .help("Open tasks")
-        .background(paper)
+        .help("Drag up or down. Click to open.")
         .clipShape(
             UnevenRoundedRectangle(
                 topLeadingRadius: store.collapsedOnRight ? 12 : 0,
@@ -62,10 +68,10 @@ struct StickyNoteView: View {
         ZStack {
             DragHeader()
             HStack(spacing: 8) {
-                Button(store.page == .tasks ? "Later" : "Tasks") {
+                NoteChip(title: store.page == .tasks ? "Later" : "Tasks") {
                     store.page = store.page == .tasks ? .later : .tasks
                 }
-                .buttonStyle(NoteChipStyle())
+                .id(store.page)
 
                 Spacer(minLength: 8)
 
@@ -114,20 +120,27 @@ struct StickyNoteView: View {
     }
 
     private var list: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                switch store.page {
-                case .later:
-                    laterRows
-                case .done:
-                    doneRows
-                case .tasks:
-                    taskRows
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    switch store.page {
+                    case .later:
+                        laterRows
+                    case .done:
+                        doneRows
+                    case .tasks:
+                        taskRows
+                    }
                 }
+                .padding(.vertical, 4)
+                .id(store.page)
             }
-            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onChange(of: store.tasks.count) { old, new in
+                guard new > old, store.page == .tasks, let id = store.tasks.last?.id else { return }
+                proxy.scrollTo(id, anchor: .bottom)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -137,31 +150,25 @@ struct StickyNoteView: View {
         } else {
             ForEach(store.tasks) { item in
                 HStack(alignment: .center, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "line.3.horizontal")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(Color.black.opacity(0.35))
-                            .frame(width: 18, height: 28)
-                        Text(item.title)
-                            .font(.system(size: 15, weight: .medium, design: .rounded))
-                            .foregroundStyle(ink)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .multilineTextAlignment(.leading)
-                    }
-                    .overlay(
-                        TaskDragSurface(
-                            onChanged: { dy in
-                                draggingId = item.id
-                                dragTranslation = dy
-                            },
-                            onEnded: { dy in
-                                let slots = Int((dy / taskRowStride).rounded())
-                                store.moveTask(item.id, by: slots)
-                                draggingId = nil
-                                dragTranslation = 0
-                            }
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.black.opacity(0.35))
+                        .frame(width: 18, height: 28)
+                        .overlay(
+                            TaskDragSurface(
+                                onChanged: { dy in
+                                    draggingId = item.id
+                                    dragTranslation = dy
+                                },
+                                onEnded: { dy in
+                                    let slots = Int((dy / taskRowStride).rounded())
+                                    store.moveTask(item.id, by: slots)
+                                    draggingId = nil
+                                    dragTranslation = 0
+                                }
+                            )
                         )
-                    )
+                    editableTitle(item)
 
                     Button {
                         store.complete(item.id)
@@ -176,16 +183,16 @@ struct StickyNoteView: View {
                     .buttonStyle(.plain)
                     .help("Done")
 
-                    Button("Later") {
+                    NoteChip(title: "Later") {
                         store.archive(item.id)
                     }
-                    .buttonStyle(NoteChipStyle())
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(draggingId == item.id ? Color.white.opacity(0.55) : Color.clear)
                 .offset(y: draggingId == item.id ? dragTranslation : 0)
                 .zIndex(draggingId == item.id ? 1 : 0)
+                .id(item.id)
                 rowLine
             }
         }
@@ -198,16 +205,11 @@ struct StickyNoteView: View {
         } else {
             ForEach(store.later) { item in
                 HStack(alignment: .center, spacing: 8) {
-                    Text(item.title)
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
-                        .foregroundStyle(ink)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .multilineTextAlignment(.leading)
+                    editableTitle(item)
 
-                    Button("To tasks") {
+                    NoteChip(title: "To tasks") {
                         store.restore(item.id)
                     }
-                    .buttonStyle(NoteChipStyle())
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -226,11 +228,7 @@ struct StickyNoteView: View {
                     Image(systemName: "checkmark")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(Color(red: 0.08, green: 0.38, blue: 0.16))
-                    Text(item.title)
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
-                        .foregroundStyle(ink)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .multilineTextAlignment(.leading)
+                    editableTitle(item)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -256,11 +254,8 @@ struct StickyNoteView: View {
 
     private var addBar: some View {
         HStack(spacing: 8) {
-            TextField("New task", text: $draft)
-                .textFieldStyle(.plain)
-                .font(.system(size: 15, weight: .medium, design: .rounded))
-                .foregroundStyle(ink)
-                .onSubmit(commit)
+            DarkAddField(text: $draft, onSubmit: commit)
+                .frame(height: 22)
 
             Button(action: park) {
                 Image(systemName: "clock")
@@ -289,6 +284,58 @@ struct StickyNoteView: View {
         .background(Color.black.opacity(0.06))
     }
 
+    @ViewBuilder
+    private func editableTitle(_ item: TaskItem) -> some View {
+        if editingId == item.id {
+            TextField("Task", text: $editDraft)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .focused($editFocused)
+                .onSubmit(commitEdit)
+                .onExitCommand(perform: cancelEdit)
+                .onAppear { editFocused = true }
+                .onChange(of: editFocused) { _, focused in
+                    guard !focused else { return }
+                    if discardEdit {
+                        discardEdit = false
+                        editingId = nil
+                        return
+                    }
+                    commitEdit()
+                }
+        } else {
+            Text(item.title)
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.leading)
+                .contentShape(Rectangle())
+                .onTapGesture { beginEdit(item) }
+        }
+    }
+
+    private func beginEdit(_ item: TaskItem) {
+        if editingId != nil {
+            commitEdit()
+        }
+        editingId = item.id
+        editDraft = item.title
+        discardEdit = false
+    }
+
+    private func commitEdit() {
+        guard let id = editingId else { return }
+        editingId = nil
+        store.rename(id, to: editDraft)
+    }
+
+    private func cancelEdit() {
+        discardEdit = true
+        editingId = nil
+    }
+
     private func commit() {
         store.add(draft)
         draft = ""
@@ -301,6 +348,118 @@ struct StickyNoteView: View {
 }
 
 private let taskRowStride: CGFloat = 46
+
+private struct StripDragSurface: NSViewRepresentable {
+    var onBegan: () -> Void
+    var onChanged: (CGFloat) -> Void
+    var onEnded: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> StripDragNSView {
+        let view = StripDragNSView()
+        view.onBegan = onBegan
+        view.onChanged = onChanged
+        view.onEnded = onEnded
+        return view
+    }
+
+    func updateNSView(_ view: StripDragNSView, context: Context) {
+        view.onBegan = onBegan
+        view.onChanged = onChanged
+        view.onEnded = onEnded
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: StripDragNSView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 20, height: proposal.height ?? 128)
+    }
+}
+
+private final class StripDragNSView: NSView {
+    var onBegan: (() -> Void)?
+    var onChanged: ((CGFloat) -> Void)?
+    var onEnded: ((CGFloat) -> Void)?
+    private var startScreenY: CGFloat = 0
+
+    override var isOpaque: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        startScreenY = event.locationInWindow.y + (window?.frame.origin.y ?? 0)
+        onBegan?()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let screenY = event.locationInWindow.y + (window?.frame.origin.y ?? 0)
+        onChanged?(screenY - startScreenY)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let screenY = event.locationInWindow.y + (window?.frame.origin.y ?? 0)
+        onEnded?(screenY - startScreenY)
+    }
+}
+
+private struct DarkAddField: NSViewRepresentable {
+    @Binding var text: String
+    var onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(string: "")
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 15, weight: .medium)
+        field.textColor = NSColor.black.withAlphaComponent(0.9)
+        field.placeholderAttributedString = NSAttributedString(
+            string: "New task",
+            attributes: [
+                .foregroundColor: NSColor.black.withAlphaComponent(0.38),
+                .font: NSFont.systemFont(ofSize: 15, weight: .medium)
+            ]
+        )
+        field.delegate = context.coordinator
+        field.target = context.coordinator
+        field.action = #selector(Coordinator.submit(_:))
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.setText = { newValue in
+            self.text = newValue
+        }
+        context.coordinator.submitText = onSubmit
+        if field.stringValue != text {
+            field.stringValue = text
+        }
+        field.textColor = NSColor.black.withAlphaComponent(0.9)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: DarkAddField
+        nonisolated(unsafe) var setText: (String) -> Void
+        nonisolated(unsafe) var submitText: () -> Void
+
+        init(_ parent: DarkAddField) {
+            self.parent = parent
+            setText = { _ in }
+            submitText = {}
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            setText(field.stringValue)
+        }
+
+        @objc func submit(_ sender: NSTextField) {
+            submitText()
+        }
+    }
+}
 
 private struct TaskDragSurface: NSViewRepresentable {
     var onChanged: (CGFloat) -> Void
@@ -344,15 +503,21 @@ private final class TaskDragNSView: NSView {
     }
 }
 
-private struct NoteChipStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.black.opacity(0.88))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.black.opacity(configuration.isPressed ? 0.16 : 0.08))
-            .clipShape(Capsule())
+private struct NoteChip: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.black.opacity(0.88))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.black.opacity(0.08))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
